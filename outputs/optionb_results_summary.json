@@ -1,0 +1,15 @@
+{
+  "input_path": "/content/ndvi_filled_option_c_poly.xlsx",
+  "clean_csv": "/content/ndvi_optionb_cleaned.csv",
+  "model_path": "/content/rf_optionb_ndvi_model.joblib",
+  "n_rows_original": 562,
+  "n_rows_cleaned": 562,
+  "n_rows_modeling": 556,
+  "unique_counties": 32,
+  "last_harvest_year_used_as_test": 2021,
+  "train_rows": 527,
+  "test_rows": 29,
+  "mae": 1.7613868040144838,
+  "rmse": 2.5331983109728173,
+  "r2": 0.5183011483152505
+}
