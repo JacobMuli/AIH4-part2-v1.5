@@ -7,16 +7,11 @@ import datetime
 import shap
 from lime.lime_tabular import LimeTabularExplainer
 
+# ----------------------------------------------------------
+# PAGE SETUP
+# ----------------------------------------------------------
 st.set_page_config(page_title="Option A — NDVI Yield Intelligence", layout="wide")
 st.title("🌱 Option A — NDVI-Based Potato Yield Forecasting")
-
-# ----------------------------------------------------------
-# PAGE NAVIGATION
-# ----------------------------------------------------------
-page = st.sidebar.radio(
-    "Navigation",
-    ["Forecasting", "SHAP Explainability", "LIME Explainability"]
-)
 
 # ----------------------------------------------------------
 # FILE UPLOAD
@@ -29,6 +24,7 @@ if not data_file or not model_file:
     st.info("Please upload both dataset and trained model.")
     st.stop()
 
+# Load data
 df = pd.read_csv(data_file)
 rf = joblib.load(model_file)
 
@@ -49,6 +45,39 @@ area_override = st.sidebar.number_input(
 
 # Filter dataset for this county
 cdf = df[df["admin_1"] == county].copy().sort_values("harvest_year")
+
+
+# ----------------------------------------------------------
+# GLOBAL FUNCTION: Prepare features for SHAP & LIME
+# ----------------------------------------------------------
+def prepare_shap_features(df_rows, model):
+    X = df_rows.copy()
+
+    # Base feature set
+    X_feat = X[["mean_annual_ndvi", "area"]].copy()
+    X_feat["area"] = area_override
+    X_feat["planting_month"] = 1
+
+    # One-hot encode counties exactly as model expects
+    if hasattr(model, "feature_names_in_"):
+        for feat in model.feature_names_in_:
+            if feat.startswith("adm1_"):
+                county_name = feat.replace("adm1_", "")
+                X_feat[feat] = (X["admin_1"] == county_name).astype(int)
+
+        X_feat = X_feat[model.feature_names_in_]
+
+    return X_feat
+
+
+# ----------------------------------------------------------
+# PAGE NAVIGATION
+# ----------------------------------------------------------
+page = st.sidebar.radio(
+    "Navigation",
+    ["Forecasting", "SHAP Explainability", "LIME Explainability"]
+)
+
 
 # ----------------------------------------------------------
 # FORECASTING PAGE
@@ -74,7 +103,7 @@ if page == "Forecasting":
         st.pyplot(fig)
 
     # ------------------------------
-    # AGGREGATION
+    # AGGREGATION FOR FORECASTING
     # ------------------------------
     agg = cdf.groupby("harvest_year").agg({
         "area": "sum",
@@ -90,7 +119,7 @@ if page == "Forecasting":
     # ------------------------------
     def build_feature_vector(last_row, rf_model):
         base = {
-            "mean_annual_ndvi": float(last_row.get("mean_annual_ndvi", 0.0)),
+            "mean_annual_ndvi": float(last_row["mean_annual_ndvi"]),
             "area": float(area_override),
             "planting_month": 1
         }
@@ -112,7 +141,7 @@ if page == "Forecasting":
         return np.array([[base["mean_annual_ndvi"], base["area"], base["planting_month"]]])
 
     # ------------------------------
-    # FORECASTING
+    # MULTI-YEAR FORECASTING
     # ------------------------------
     st.header("📅 Multi-Year Forecasting")
 
@@ -162,9 +191,9 @@ if page == "Forecasting":
     final_tonnes = float(forecast_df.iloc[-1]["predicted_production"])
 
     # ------------------------------
-    # STORAGE
+    # STORAGE ENGINE (IMPROVED)
     # ------------------------------
-    st.header("❄ Cold Storage Requirement")
+    st.header("❄ Cold Storage Requirement (Type 1, Type 2, Type 3)")
 
     def pack_storage(tonnes, sizes=[1000, 500, 250], fill=0.9):
         needed = int(np.ceil(tonnes / fill))
@@ -180,9 +209,19 @@ if page == "Forecasting":
         if remaining > 0:
             allocation.append({"size": 250, "count": 1})
 
-        total = sum(x["size"] * x["count"] for x in allocation)
-        util = tonnes / total
-        return {"required_capacity": needed, "allocation": allocation, "utilization": util}
+        typed_allocation = {
+            f"type {i+1}": allocation[i]
+            for i in range(len(allocation))
+        }
+
+        total_capacity = sum(a["size"] * a["count"] for a in allocation)
+        utilization = tonnes / total_capacity if total_capacity else 0
+
+        return {
+            "required_capacity": needed,
+            "allocation": typed_allocation,
+            "utilization": utilization
+        }
 
     storage = pack_storage(final_tonnes)
     st.json(storage)
@@ -193,34 +232,18 @@ if page == "Forecasting":
         file_name="optionA_forecast_output.json"
     )
 
+
 # ----------------------------------------------------------
 # SHAP PAGE
 # ----------------------------------------------------------
 elif page == "SHAP Explainability":
-
     st.header("🔍 SHAP Explainability")
-
-    # Prepare features
-    def prepare_shap_features(df_row, model):
-        X = df_row.copy()
-        X_feat = X[["mean_annual_ndvi", "area"]].copy()
-        X_feat["area"] = area_override
-        X_feat["planting_month"] = 1
-
-        if hasattr(model, "feature_names_in_"):
-            for feat in model.feature_names_in_:
-                if feat.startswith("adm1_"):
-                    X_feat[feat] = (X["admin_1"] == feat.replace("adm1_", "")).astype(int)
-
-            X_feat = X_feat[model.feature_names_in_]
-
-        return X_feat
 
     X_shap = prepare_shap_features(cdf, rf)
     explainer = shap.TreeExplainer(rf)
     shap_values = explainer.shap_values(X_shap)
 
-    st.subheader("Feature Importance (Bar)")
+    st.subheader("Feature Importance (Bar Plot)")
     fig = plt.figure()
     shap.summary_plot(shap_values, X_shap, plot_type="bar", show=False)
     st.pyplot(fig)
@@ -230,11 +253,11 @@ elif page == "SHAP Explainability":
     shap.summary_plot(shap_values, X_shap, show=False)
     st.pyplot(fig)
 
+
 # ----------------------------------------------------------
 # LIME PAGE
 # ----------------------------------------------------------
 elif page == "LIME Explainability":
-
     st.header("🟩 LIME Explainability")
 
     X_shap = prepare_shap_features(cdf, rf)
@@ -247,7 +270,7 @@ elif page == "LIME Explainability":
     )
 
     idx = st.number_input(
-        "Select row index to explain:",
+        "Select row index to explain",
         min_value=0,
         max_value=len(X_lime) - 1,
         value=0
@@ -261,7 +284,6 @@ elif page == "LIME Explainability":
 
     st.subheader("LIME Feature Contributions")
     st.json(lime_exp.as_list())
-
     st.pyplot(lime_exp.as_pyplot_figure())
 
 
